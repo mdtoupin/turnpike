@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Turnpike: a highway to the horizon under a toll gantry;
+       the three lights are the agents (claude / codex / deepseek). -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#0f1115" stroke="#2a2f3a" stroke-width="6"/>
+
+  <!-- roadbed -->
+  <path d="M 60 236 L 118 54 L 138 54 L 196 236 Z" fill="#2a3140"/>
+  <!-- edge lines -->
+  <path d="M 66 236 L 121 56" stroke="#6ea8fe" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M 190 236 L 135 56" stroke="#6ea8fe" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <!-- center dashes -->
+  <line x1="128" y1="228" x2="128" y2="60" stroke="#d7dae0" stroke-width="6"
+        stroke-dasharray="20 16" stroke-linecap="round"/>
+
+  <!-- toll gantry -->
+  <rect x="52" y="84" width="152" height="14" rx="7" fill="#6ea8fe"/>
+  <rect x="58" y="96" width="10" height="38" rx="4" fill="#6ea8fe"/>
+  <rect x="188" y="96" width="10" height="38" rx="4" fill="#6ea8fe"/>
+
+  <!-- agent lights -->
+  <circle cx="100" cy="91" r="9" fill="#d97757" stroke="#0f1115" stroke-width="3"/>
+  <circle cx="128" cy="91" r="9" fill="#74c69d" stroke="#0f1115" stroke-width="3"/>
+  <circle cx="156" cy="91" r="9" fill="#9d7cfe" stroke="#0f1115" stroke-width="3"/>
+</svg>

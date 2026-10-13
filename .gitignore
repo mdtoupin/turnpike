@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+deck/src-tauri/target/
+.claude/

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Turnpike Deck",
+  "version": "0.1.0",
+  "identifier": "local.turnpike.deck",
+  "build": {},
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}
