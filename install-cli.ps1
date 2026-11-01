@@ -15,9 +15,11 @@ foreach ($turnpikePathValue in @($Destination, $PythonExecutable)) {
     }
 }
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-foreach ($turnpikeFile in @('turnpike.py', 'turnpike_rpc.py')) {
+foreach ($turnpikeFile in @('turnpike.py', 'turnpike_rpc.py', 'turnpike_notes.py')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $turnpikeFile) -Destination (Join-Path $Destination $turnpikeFile) -Force
 }
+New-Item -ItemType Directory -Path (Join-Path $Destination 'tools') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'tools\probe_providers.py') -Destination (Join-Path $Destination 'tools\probe_providers.py') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'tools\turnpike_remote.py') -Destination (Join-Path $Destination 'turnpike_remote.py') -Force
 $turnpikeScript = Join-Path $Destination 'turnpike.py'
 $turnpikeLauncher = "@echo off`r`n`"$PythonExecutable`" -X utf8 `"$turnpikeScript`" rpc --as `"%~1`"`r`nexit /b %errorlevel%`r`n"

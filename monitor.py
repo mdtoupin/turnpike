@@ -12,12 +12,14 @@ import argparse
 import json
 import sqlite3
 import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 import turnpike
+import turnpike_notes as notes
 
 ROOT = Path(__file__).resolve().parent
 UI = ROOT / "ui" / "index.html"
@@ -108,12 +110,15 @@ def git_state(workdir):
 
 
 def db_version(con):
-    return tuple(con.execute("""
+    version = tuple(con.execute("""
         SELECT (SELECT IFNULL(MAX(id),0)  FROM messages),
                (SELECT IFNULL(MAX(updated_at),'') FROM tasks),
                (SELECT IFNULL(MAX(updated_at),'') FROM projects),
                (SELECT COUNT(*) FROM tasks),
                (SELECT IFNULL(MAX(last_seen),'') FROM agents)""").fetchone())
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='note_jobs'").fetchone():
+        version += tuple(con.execute("SELECT COUNT(*),IFNULL(SUM(revision),0) FROM note_jobs").fetchone())
+    return version
 
 
 def q(con, sql, vals=()):
@@ -134,6 +139,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def read_body(self):
         n = int(self.headers.get("Content-Length", 0))
+        if not 0 <= n <= 12 * 1024 * 1024:
+            raise ValueError("Request body exceeds 12 MiB")
         return json.loads(self.rfile.read(n) or b"{}")
 
     def do_GET(self):
@@ -154,6 +161,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif u.path == "/api/attachment":
+                aid = parse_qs(u.query).get("id", [""])[0]
+                con.executescript(notes.SCHEMA)
+                asset = con.execute("SELECT mime,data FROM note_assets WHERE id=?", (aid,)).fetchone()
+                if not asset:
+                    self.send_json({"error": "Attachment not found"}, 404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", asset["mime"])
+                self.send_header("Content-Length", str(len(asset["data"])))
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Cache-Control", "private, max-age=86400")
+                self.end_headers()
+                self.wfile.write(asset["data"])
             elif u.path == "/api/projects":
                 self.send_json({
                     "projects": q(con, """
@@ -200,9 +221,9 @@ class Handler(BaseHTTPRequestHandler):
                     ORDER BY m.id DESC LIMIT 50""")
                 self.send_json({"projects": rows, "items": items, "now": turnpike.now()})
             elif u.path == "/api/activity":
-                self.send_json(q(con, """
+                self.send_json(notes.attach_metadata(con, q(con, """
                     SELECT m.*, p.slug FROM messages m JOIN projects p ON p.id=m.project_id
-                    ORDER BY m.id DESC LIMIT 40"""))
+                    ORDER BY m.id DESC LIMIT 40""")))
             elif u.path == "/api/events":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -231,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
                 msgs = q(con, "SELECT * FROM (SELECT * FROM messages WHERE project_id=? ORDER BY id DESC LIMIT 300) ORDER BY id", (pid,))
                 self.send_json({
                     "project": p[0],
-                    "messages": msgs,
+                    "messages": notes.attach_metadata(con, msgs),
                     "tasks": q(con, "SELECT * FROM tasks WHERE project_id=? ORDER BY id", (pid,)),
                     "cursors": q(con, "SELECT * FROM cursors WHERE project_id=?", (pid,)),
                     "agents": q(con, "SELECT * FROM agents ORDER BY name"),
@@ -249,17 +270,17 @@ class Handler(BaseHTTPRequestHandler):
         try:
             data = self.read_body()
             if u.path == "/api/post":
-                p = q(con, "SELECT * FROM projects WHERE slug=?", (data["slug"],))
-                if not p:
-                    self.send_json({"error": "no such project"}, 404)
-                    return
                 kind = data.get("kind", "directive")
-                cur = con.execute(
-                    "INSERT INTO messages (project_id, author, kind, body, created_at) VALUES (?,?,?,?,?)",
-                    (p[0]["id"], "user", kind, data["body"], turnpike.now()))
-                con.execute("UPDATE projects SET updated_at=? WHERE id=?", (turnpike.now(), p[0]["id"]))
-                con.commit()
-                self.send_json({"ok": True, "id": cur.lastrowid})
+                import uuid
+                result = notes.post_user_message(data["slug"], kind, data.get("body", ""), data.get("attachments", []), data.get("client_id") or str(uuid.uuid4()))
+                if result["response"]:
+                    try:
+                        notes.ensure_worker()
+                    except OSError:
+                        result["worker_warning"] = "Note is saved and queued; the responder could not be started"
+                self.send_json(result)
+            elif u.path == "/api/attachment":
+                self.send_json({"ok": True, "attachment": notes.store_asset(data["slug"], data["mime"], data["data"])})
             elif u.path == "/api/task":
                 # {id, status?} update or {slug, title, detail?} create
                 if "id" in data:
@@ -334,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"error": "slug exists"}, 409)
             else:
                 self.send_json({"error": "not found"}, 404)
-        except (KeyError, json.JSONDecodeError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             self.send_json({"error": f"bad request: {e}"}, 400)
         finally:
             con.close()
@@ -344,6 +365,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8642)
     a = ap.parse_args()
+    con = notes.connect()
+    pending = con.execute("SELECT 1 FROM note_jobs WHERE state IN ('queued','running','waiting_for_auth','waiting_for_quota') LIMIT 1").fetchone()
+    con.close()
+    if pending:
+        try:
+            notes.ensure_worker()
+        except OSError:
+            print("Notes are queued; responder startup failed", file=sys.stderr)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     srv.daemon_threads = True
     print(f"turnpike monitor on http://127.0.0.1:{a.port}  (db: {turnpike.DB_PATH})")

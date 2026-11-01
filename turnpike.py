@@ -360,6 +360,11 @@ def cmd_rpc(a):
     serve(a.author)
 
 
+def cmd_note_worker(a):
+    from turnpike_notes import run_worker
+    run_worker(once=a.once)
+
+
 def cmd_task_add(a):
     con = connect()
     p = get_project(con, a.project)
@@ -650,6 +655,11 @@ def main(argv=None):
     p = sub.add_parser("rpc", help="serve versioned JSON board requests on stdin/stdout (suitable for SSH)")
     p.add_argument("--as", dest="author", required=True, choices=("codex", "claude", "deepseek"))
     p.set_defaults(fn=cmd_rpc)
+
+    p = sub.add_parser("note-worker", help="run the durable read-only Sol note responder")
+    p.add_argument("--as", dest="author", required=True, choices=("codex",))
+    p.add_argument("--once", action="store_true", help="process at most one queued note")
+    p.set_defaults(fn=cmd_note_worker)
 
     p = sub.add_parser("post", help="post a message to a project")
     p.add_argument("project")
