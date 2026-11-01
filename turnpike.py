@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS projects (
     slug       TEXT NOT NULL UNIQUE,
     name       TEXT NOT NULL,
     goal       TEXT NOT NULL DEFAULT '',
-    status     TEXT NOT NULL DEFAULT 'active',   -- active | paused | done
+    status     TEXT NOT NULL DEFAULT 'active',   -- active | paused | done | archived
     summary    TEXT NOT NULL DEFAULT '',          -- living layman's-terms state of the project
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -628,7 +628,7 @@ def main(argv=None):
 
     p = sub.add_parser("status", help="set project status")
     p.add_argument("project")
-    p.add_argument("status", choices=("active", "paused", "done"))
+    p.add_argument("status", choices=("active", "paused", "done", "archived"))
     p.set_defaults(fn=cmd_project_status)
 
     p = sub.add_parser("task-add", help="add a task")
