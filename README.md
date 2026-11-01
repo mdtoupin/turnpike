@@ -2,7 +2,11 @@
 
 A local coordination bus for AI coding agents (Claude Code + Codex) and you.
 Agents post plain-language progress, decisions, questions, and handoffs to a shared
-SQLite database; you watch and steer from a monitor web app. No cloud, no deps.
+SQLite database; you watch and steer from a monitor web app. The core bus uses
+Python's standard library; optional note replies use an existing model subscription.
+
+**Start here:** [Agent manual](docs/AGENT-MANUAL.md) — LAN and SSH setup, agent
+commands, board protocol, feature guide, housekeeping and troubleshooting.
 
 ```
 you  <->  monitor (http://127.0.0.1:8642)
@@ -136,7 +140,8 @@ turnpike task-update <id> --status todo|doing|done|blocked|dropped [--assignee X
 turnpike tasks <slug> [--all]
 ```
 
-Everything takes `--json` where machine-readable output is useful.
+Read commands support `--json` where shown in their help. Use the versioned RPC
+gateway for structured mutation results; legacy writes generally print prose.
 
 ## Design notes
 
