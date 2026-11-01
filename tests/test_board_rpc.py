@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout, redirect_stderr
+import io
 import importlib.util
 import json
 import os
@@ -8,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
@@ -121,6 +124,53 @@ class BoardRpcTests(unittest.TestCase):
         self.cli("task-update", str(task["id"]), "--detail", "Changed elsewhere", "--as", "codex")
         denied = self.execute("task.update", task_id=task["id"], expected_revision=task["revision"], changes={"status": "done"})
         self.assertEqual(denied["error"]["code"], "revision_conflict")
+
+    def test_same_second_aba_cannot_restore_an_old_revision(self):
+        with patch.object(turnpike, "now", return_value="2026-11-01T12:00:00Z"):
+            original = self.execute("task.create", project="stable-slug", title="Stable")["result"]["task"]
+            b = self.execute("task.update", task_id=original["id"], expected_revision=original["revision"], changes={"detail": "B"})["result"]["task"]
+            a = self.execute("task.update", task_id=b["id"], expected_revision=b["revision"], changes={"detail": ""})["result"]["task"]
+            self.assertEqual({k:v for k,v in a.items() if k!="revision"}, {k:v for k,v in original.items() if k!="revision"})
+            denied = self.execute("task.update", task_id=a["id"], expected_revision=original["revision"], changes={"status": "done"})
+            self.assertEqual(denied["error"]["code"], "revision_conflict")
+
+    def test_numeric_project_ids_are_bounded_without_killing_session(self):
+        for value in (-1, 2**63, 10**100):
+            reply = self.run_rpc(self.request("board", project=value))
+            self.assertEqual(reply["error"]["code"], "invalid_params")
+
+    def test_truncated_reply_after_commit_retains_same_id_recovery(self):
+        spec = importlib.util.spec_from_file_location("remote", ROOT/"tools"/"turnpike_remote.py")
+        remote = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(remote)
+        request = self.request("post", project="stable-slug", body="Accepted before output was lost")
+        path = Path(self.temp.name)/"request.json"
+        path.write_text(json.dumps(request), encoding="utf-8")
+        real_run = subprocess.run
+        def transport(*args, **kwargs):
+            accepted = real_run([sys.executable, str(ROOT/"turnpike.py"), "rpc", "--as", "codex"],
+                                input=kwargs["input"], capture_output=True, text=True, encoding="utf-8", env=self.env)
+            self.assertEqual(accepted.returncode, 0)
+            return subprocess.CompletedProcess(args[0], 0, stdout='{"version":1,', stderr="")
+        stdout = io.StringIO()
+        with patch.object(sys, "argv", ["remote", "--host", "workstation", "--as", "codex", "--request", str(path)]), \
+             patch.object(remote.subprocess, "run", side_effect=transport), redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            self.assertEqual(remote.main(), 3)
+        reply = json.loads(stdout.getvalue())
+        self.assertEqual(reply["request_id"], request["request_id"])
+        self.assertEqual(reply["error"]["code"], "ssh_unknown_outcome")
+        self.assertTrue(reply["error"]["retryable"])
+        self.assertTrue(self.run_rpc(request)["ok"])
+        self.assertEqual(len(self.messages()), 1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows installer")
+    def test_installer_rejects_unicode_paths_before_copying(self):
+        destination = Path(self.temp.name)/"cli-é"
+        result = subprocess.run(["powershell", "-NoProfile", "-File", str(ROOT/"install-cli.ps1"),
+                                 "-Destination", str(destination), "-PythonExecutable", sys.executable], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires ASCII paths", result.stderr)
+        self.assertFalse(destination.exists())
 
     def test_task_update_status_and_history(self):
         task = self.execute("task.create", project="stable-slug", title="New task")["result"]["task"]

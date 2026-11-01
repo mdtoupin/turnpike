@@ -9,6 +9,11 @@ if (-not $PythonExecutable) {
     if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve Python executable' }
 }
 if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) { throw 'Python executable does not exist' }
+foreach ($turnpikePathValue in @($Destination, $PythonExecutable)) {
+    if ($turnpikePathValue -match '[^\x20-\x7e]|[%!"&|<>^]') {
+        throw 'The SSH launcher currently requires ASCII paths without command metacharacters; choose an explicit supported destination and Python executable.'
+    }
+}
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 foreach ($turnpikeFile in @('turnpike.py', 'turnpike_rpc.py')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $turnpikeFile) -Destination (Join-Path $Destination $turnpikeFile) -Force

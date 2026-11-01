@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=30)
     args = parser.parse_args()
     request_id = None
+    submitted = False
     try:
         if not 0 < args.timeout <= 300:
             raise ValueError("timeout must be between 0 and 300 seconds")
@@ -56,11 +57,14 @@ def main():
             request["request_id"] = str(uuid.UUID(args.request_id))
         request.setdefault("request_id", str(uuid.uuid4()))
         request_id = request["request_id"]
+        if not isinstance(request_id, str) or str(uuid.UUID(request_id)) != request_id:
+            raise ValueError("request_id must be a canonical lowercase UUID")
         payload = json.dumps(request, ensure_ascii=False) + "\n"
         if len(payload.encode("utf-8")) > 1024*1024:
             raise ValueError("Request exceeds 1 MiB")
         command = ssh_command(args)
         print("Turnpike request ID: " + request_id, file=sys.stderr, flush=True)
+        submitted = True
         run = subprocess.run(command, input=payload, capture_output=True, text=True, encoding="utf-8", timeout=args.timeout)
         if run.returncode:
             response = {"version": 1, "request_id": request_id, "ok": False,
@@ -79,8 +83,11 @@ def main():
         code = 3
     except (ValueError, OSError) as exc:
         response = {"version": 1, "request_id": request_id, "ok": False,
-                    "error": {"code": "client_error", "message": str(exc), "retryable": False}}
-        code = 1
+                    "error": {"code": "ssh_unknown_outcome" if submitted else "client_error", "message": str(exc),
+                              "retryable": submitted}}
+        if submitted:
+            response["error"]["instruction"] = "The request may have committed; retry identical content with the same request ID"
+        code = 3 if submitted else 1
     print(json.dumps(response, ensure_ascii=True))
     return code
 

@@ -30,6 +30,18 @@ CREATE TABLE IF NOT EXISTS worker_inboxes (
     acknowledged_id INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (project_id, actor, worker_id)
 );
+CREATE TABLE IF NOT EXISTS task_rpc_revisions (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO task_rpc_revisions (task_id, revision) SELECT id, 0 FROM tasks;
+CREATE TRIGGER IF NOT EXISTS task_rpc_revision_insert AFTER INSERT ON tasks BEGIN
+    INSERT INTO task_rpc_revisions (task_id,revision) VALUES (NEW.id,1);
+END;
+CREATE TRIGGER IF NOT EXISTS task_rpc_revision_update AFTER UPDATE ON tasks BEGIN
+    INSERT INTO task_rpc_revisions (task_id,revision) VALUES (NEW.id,1)
+    ON CONFLICT(task_id) DO UPDATE SET revision=revision+1;
+END;
 """
 
 FIELDS = {
@@ -78,6 +90,8 @@ def flag(params, key, default=False):
 
 def project(con, selector):
     if type(selector) is int:
+        if not 1 <= selector <= 2**63-1:
+            raise RequestError("invalid_params", "Project ID is outside the supported range")
         rows = con.execute("SELECT * FROM projects WHERE id=?", (selector,)).fetchall()
     elif isinstance(selector, str) and 0 < len(selector) <= 256:
         rows = con.execute("SELECT * FROM projects WHERE slug=?", (selector,)).fetchall()
@@ -92,9 +106,10 @@ def project(con, selector):
     return rows[0]
 
 
-def card(row):
+def card(con, row):
     value = dict(row)
-    value["revision"] = digest(value)
+    revision = con.execute("SELECT revision FROM task_rpc_revisions WHERE task_id=?", (row["id"],)).fetchone()[0]
+    value["revision"] = f"{revision}:" + digest(value)
     return value
 
 
@@ -132,7 +147,7 @@ def dispatch(con, actor, operation, params):
         old = con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
         if old is None:
             raise RequestError("not_found", "Task not found")
-        if text(params, "expected_revision", maximum=64) != digest(dict(old)):
+        if text(params, "expected_revision", maximum=128) != card(con, old)["revision"]:
             raise RequestError("revision_conflict", "Task changed; read the current board before retrying")
         if old["status"] == "doing" and old["assignee"] not in ("", actor):
             raise RequestError("task_owned", "Another agent is working on this task")
@@ -155,13 +170,13 @@ def dispatch(con, actor, operation, params):
         if "status" in changes:
             bus.apply_task_status(con, task_id, changes["status"])
         message(con, old["project_id"], actor, "update", f"Updated task #{task_id}: " + ", ".join(changes))
-        return {"task": card(con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())}
+        return {"task": card(con, con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())}
     p = project(con, params.get("project"))
     pid = p["id"]
     if operation == "board":
         include = flag(params, "include_dropped")
         tasks = con.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY id", (pid,)).fetchall()
-        return {"project": dict(p), "tasks": [card(t) for t in tasks if include or t["status"] != "dropped"]}
+        return {"project": dict(p), "tasks": [card(con, t) for t in tasks if include or t["status"] != "dropped"]}
     if operation in ("messages", "inbox"):
         limit = integer(params, "limit", default=50, minimum=1, maximum=200)
         if operation == "inbox":
@@ -202,7 +217,7 @@ def dispatch(con, actor, operation, params):
         cur = con.execute("INSERT INTO tasks (project_id,title,detail,status,assignee,created_by,created_at,updated_at) VALUES (?,?,?,'todo','',?,?,?)",
                           (pid, title, detail, actor, stamp, stamp))
         message(con, pid, actor, "update", f"Created task #{cur.lastrowid}: {title}")
-        return {"task": card(con.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone())}
+        return {"task": card(con, con.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone())}
     raise RequestError("unknown_operation", "Unsupported operation")
 
 
