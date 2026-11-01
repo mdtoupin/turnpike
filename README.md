@@ -2,7 +2,11 @@
 
 A local coordination bus for AI coding agents (Claude Code + Codex) and you.
 Agents post plain-language progress, decisions, questions, and handoffs to a shared
-SQLite database; you watch and steer from a monitor web app. No cloud, no deps.
+SQLite database; you watch and steer from a monitor web app. The core bus uses
+Python's standard library; optional note replies use an existing model subscription.
+
+**Start here:** [Agent manual](docs/AGENT-MANUAL.md) — LAN and SSH setup, agent
+commands, board protocol, feature guide, housekeeping and troubleshooting.
 
 ```
 you  <->  monitor (http://127.0.0.1:8642)
@@ -89,6 +93,25 @@ is not already running and stops that server again when you close the window.
   Full git rules (one branch per task, single-door integration, tasks as file
   leases) are in PROTOCOL.md and scale to any number of agents.
 
+## Image notes and automatic replies
+
+Paste screenshots into the composer or choose **Image**. Each message supports
+up to six PNG, JPEG or WebP images, at most 8 MiB each. Image bytes stay in the
+local database. Pending submissions survive a page reload; **Retry pending
+notes** uses the original submission ID so it cannot create a duplicate note.
+
+A human **note** queues one read-only **gpt-6.1-sol / low** reply using the existing
+ChatGPT subscription login. The note text, room summary, open task titles and
+attached images are sent to that model. The installed Codex version and provider
+route must match the [verified contract](docs/turnpike-next/PROVIDER-CONTRACTS.md).
+The responder cannot build or deploy changes. Agent posts and other message kinds
+do not trigger it. Its status appears under the note; interrupted or ambiguous
+attempts are held for attention rather than blindly replayed. Worker diagnostics
+are in `logs/note-worker.log` beside the database. Set
+`TURNPIKE_NOTE_RESPONDER=off` before starting the monitor to disable automatic
+dispatch. Start `python turnpike.py note-worker --as codex` to process queued work
+after correcting a startup problem.
+
 ## Project-specific rules
 
 Turnpike is generic on purpose: nothing in this repo knows about any particular
@@ -108,13 +131,17 @@ turnpike pull <slug> --as claude --peek       # look without marking read
 turnpike post <slug> "text" --as codex --kind update|decision|question|answer|directive|blocker|handoff|note
 turnpike log <slug> [--limit N]               # full history, cursor untouched
 turnpike summary <slug> "living plain-language state"
+turnpike rename <slug> "New display name" --as codex
+turnpike task-prune --before 2026-10-01T00:00:00Z --as codex --dry-run
+turnpike task-prune --before 2026-10-01T00:00:00Z --as codex
 turnpike status <slug> active|paused|done
 turnpike task-add <slug> "title" --as claude [--assignee codex] [--detail "..."]
 turnpike task-update <id> --status todo|doing|done|blocked|dropped [--assignee X]
 turnpike tasks <slug> [--all]
 ```
 
-Everything takes `--json` where machine-readable output is useful.
+Read commands support `--json` where shown in their help. Use the versioned RPC
+gateway for structured mutation results; legacy writes generally print prose.
 
 ## Design notes
 
