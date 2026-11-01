@@ -288,6 +288,10 @@ mark.cur{background:var(--warn-tint);outline:1px solid var(--warn)}
 .row{display:grid;grid-template-columns:var(--gutter) minmax(0,1fr);column-gap:var(--gap);
   padding:8px var(--pad-x);position:relative;content-visibility:auto;contain-intrinsic-size:0 64px}
 .row:hover{background:var(--bg-hover)}
+/* content-visibility implies paint containment. Release it for the active row
+   so the toolbar's negative top inset can paint and receive clicks above it.
+   Lift the whole row above siblings, while keeping sticky date chrome above it. */
+.row:hover,.row:focus-within{content-visibility:visible;z-index:1}
 .row.grouped{padding-top:2px}
 .row .gutter{position:relative}
 .row.grouped .gutter::after{content:attr(data-time);font:var(--t-mono-in);color:var(--tx-3);
@@ -421,10 +425,10 @@ code.branch{font:var(--t-mono-in);border:1px solid var(--line-hair);border-radiu
 
 /* ============================================================ 4.10 DIVIDERS */
 .day{position:sticky;top:10px;z-index:var(--z-day);height:1px;margin:16px 0 8px;
-  background:var(--line-hair);contain:layout}
+  background:var(--line-hair);overflow:visible}
 .day>span{position:relative;top:-9px;left:var(--pad-x);display:inline-block;padding:1px 10px;
   background:var(--bg-canvas);border:1px solid var(--line-hair);border-radius:var(--r-pill);
-  font:var(--t-label);letter-spacing:var(--tracking-label);color:var(--tx-3)}
+  font:var(--t-label);letter-spacing:var(--tracking-label);color:var(--tx-3);z-index:1}
 /* Stuck: the pill floats over whatever row is scrolling beneath it, so the stuck
    band must paint the FULL row width, not just the label. Drawn as an out-of-flow
    pseudo-element so the divider's own geometry (1px + margins) never changes and
