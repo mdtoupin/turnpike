@@ -92,21 +92,10 @@ def flag(params, key, default=False):
 
 
 def project(con, selector):
-    if type(selector) is int:
-        if not 1 <= selector <= 2**63-1:
-            raise RequestError("invalid_params", "Project ID is outside the supported range")
-        rows = con.execute("SELECT * FROM projects WHERE id=?", (selector,)).fetchall()
-    elif isinstance(selector, str) and 0 < len(selector) <= 256:
-        rows = con.execute("SELECT * FROM projects WHERE slug=?", (selector,)).fetchall()
-        if not rows:
-            rows = con.execute("SELECT * FROM projects WHERE name=? COLLATE NOCASE", (selector,)).fetchall()
-    else:
-        raise RequestError("invalid_params", "project must be a stable ID, slug or display name")
-    if not rows:
-        raise RequestError("not_found", "Project not found")
-    if len(rows) != 1:
-        raise RequestError("ambiguous_project", "Display name is ambiguous; use a slug or ID")
-    return rows[0]
+    try:
+        return bus.resolve_project(con, selector)
+    except bus.ProjectLookupError as exc:
+        raise RequestError(exc.code, str(exc)) from exc
 
 
 def card(con, row):

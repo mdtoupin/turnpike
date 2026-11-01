@@ -161,12 +161,45 @@ def connect() -> sqlite3.Connection:
     return con
 
 
-def get_project(con, slug: str) -> sqlite3.Row:
-    row = con.execute("SELECT * FROM projects WHERE slug=?", (slug,)).fetchone()
+class ProjectLookupError(ValueError):
+    def __init__(self, code, message):
+        self.code = code
+        super().__init__(message)
+
+
+def resolve_project(con, selector) -> sqlite3.Row:
+    """Exact slugs win; CLI numeric IDs and unique visible names also resolve."""
+    if type(selector) is int:
+        project_id = selector
+    elif isinstance(selector, str) and 0 < len(selector) <= 256 and "\x00" not in selector:
+        row = con.execute("SELECT * FROM projects WHERE slug=?", (selector,)).fetchone()
+        if row is not None:
+            return row
+        if selector.isascii() and selector.isdigit():
+            project_id = int(selector)
+        else:
+            # Python casefold also handles non-ASCII names; SQLite NOCASE does not.
+            rows = [p for p in con.execute("SELECT * FROM projects") if p["name"].casefold() == selector.casefold()]
+            if len(rows) > 1:
+                raise ProjectLookupError("ambiguous_project", "Display name matches multiple projects; use an exact slug or numeric ID")
+            if not rows:
+                raise ProjectLookupError("not_found", "Project not found; list projects and use a slug, ID or unique display name")
+            return rows[0]
+    else:
+        raise ProjectLookupError("invalid_params", "project must be a stable ID, exact slug or display name")
+    if not 1 <= project_id <= 2**63-1:
+        raise ProjectLookupError("invalid_params", "Project ID is outside the supported range")
+    row = con.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     if row is None:
-        slugs = [r["slug"] for r in con.execute("SELECT slug FROM projects")]
-        sys.exit(f"error: no project '{slug}'. Existing: {', '.join(slugs) or '(none)'}")
+        raise ProjectLookupError("not_found", "Project ID not found")
     return row
+
+
+def get_project(con, selector) -> sqlite3.Row:
+    try:
+        return resolve_project(con, selector)
+    except ProjectLookupError as exc:
+        sys.exit(f"error: {exc.code}: {exc}")
 
 
 def touch_project(con, project_id: int):
@@ -259,7 +292,7 @@ def cmd_projects(a):
         print("no projects yet. create one: turnpike create <slug> --goal \"...\"")
         return
     for r in rows:
-        print(f"{r['slug']:<24} [{r['status']}] open tasks: {r['open_tasks']:<3} updated {r['updated_at']}  - {r['goal'][:70]}")
+        print(f"{r['slug']:<24} [{r['status']}] name: {r['name']}  open tasks: {r['open_tasks']:<3} updated {r['updated_at']}  - {r['goal'][:70]}")
 
 
 def cmd_post(a):
@@ -593,7 +626,7 @@ def cmd_sessions(a):
     q = ("SELECT b.*, p.slug FROM session_bindings b JOIN projects p ON p.id=b.project_id")
     vals, where = [], []
     if a.project:
-        where.append("p.slug=?"); vals.append(a.project)
+        where.append("p.id=?"); vals.append(get_project(con, a.project)["id"])
     if not a.all:
         where.append("b.status='active'")
     if where:
@@ -630,7 +663,7 @@ def cmd_restore(a):
          "WHERE b.status='active'")
     vals = []
     if a.project:
-        q += " AND p.slug=?"; vals.append(a.project)
+        q += " AND p.id=?"; vals.append(get_project(con, a.project)["id"])
     if not a.all:
         # default: only sessions whose task is actively being worked, plus untasked ones
         q += (" AND (b.task_id IS NULL OR b.task_id IN "
@@ -684,6 +717,11 @@ def cmd_restore(a):
 
 
 def main(argv=None):
+    # CLI and SSH clients share UTF-8, including visible names outside the local
+    # Windows code page. JSON mode alone cannot protect the prose commands.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(prog="turnpike", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
