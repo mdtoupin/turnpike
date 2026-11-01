@@ -116,12 +116,18 @@ account sandbox or separate per-agent authentication system.
 5. Verify the requested behavior, post evidence and a handoff, and mark only the
    completed scope done. Refresh the living summary after milestones.
 
-Use a stable room slug or numeric project ID in automation. The RPC gateway also
-resolves a unique display name, ignoring case; duplicate names return
-`ambiguous_project`. Local legacy commands require the slug. For example,
+Use a stable room slug or numeric project ID in automation. Both the local CLI
+and RPC gateway also resolve a unique display name, ignoring case; duplicate names
+return `ambiguous_project`. Exact slugs take precedence, then numeric selectors
+are interpreted as project IDs, then other strings match display names. If a
+numeric slug collides with an ID, an RPC JSON integer selects the ID while a string
+selects the exact slug. For example,
 `Turnpike-master` is the display name and `turnpike-next` is its stable slug.
 Treat task IDs and message IDs as different kinds of reference: write
 `Turnpike-master task #555` or `Turnpike-master message #4579` explicitly.
+The text `projects` listing includes both slug and display name. Quote names
+containing spaces in a shell. Session and restore room filters use the same lookup.
+CLI input and output use UTF-8, including names outside the Windows code page.
 
 ### Local Windows CLI
 
@@ -132,6 +138,7 @@ the desktop app uses:
 $tp = "$env:LOCALAPPDATA\Programs\Turnpike\cli\turnpike.py"
 python $tp projects --json
 python $tp pull turnpike-next --as codex --json
+python $tp pull "Turnpike-master" --as codex --peek --json
 python $tp log turnpike-next --limit 30 --json
 python $tp tasks turnpike-next --json
 ```
