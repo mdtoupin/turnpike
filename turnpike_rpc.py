@@ -54,6 +54,9 @@ FIELDS = {
     "post": {"project", "kind", "body"},
     "task.create": {"project", "title", "detail"},
     "task.update": {"task_id", "expected_revision", "changes"},
+    "summary.get": {"project"},
+    "summary.update": {"project", "expected_revision", "summary"},
+    "summary.history": {"project", "after_revision", "limit"},
 }
 
 
@@ -136,6 +139,7 @@ def dispatch(con, actor, operation, params):
     if operation == "capabilities":
         return {"protocol_version": 1, "operations": sorted(FIELDS),
                 "atomic_retry_receipts": True, "explicit_inbox_ack": True,
+                "summary_audit": True,
                 "model_execution": False, "attachments": False,
                 "task_ownership": "cooperative actor ownership with optimistic revisions; process fencing is not implemented"}
     if operation == "projects":
@@ -173,6 +177,22 @@ def dispatch(con, actor, operation, params):
         return {"task": card(con, con.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())}
     p = project(con, params.get("project"))
     pid = p["id"]
+    if operation == "summary.get":
+        return bus.summary_snapshot(con, pid)
+    if operation == "summary.update":
+        expected = text(params, "expected_revision", maximum=128)
+        if expected != bus.summary_snapshot(con, pid)["revision"]:
+            raise RequestError("revision_conflict", "Summary changed; read the current summary before retrying")
+        result = bus.set_summary(con, pid, text(params, "summary"), actor, "rpc")
+        if result["changed"]:
+            result["message_id"] = message(con, pid, actor, "update", f"Updated the living summary (revision {result['revision'].split(':')[0]}).")
+        return result
+    if operation == "summary.history":
+        after = integer(params, "after_revision", default=0)
+        limit = integer(params, "limit", default=50, minimum=1, maximum=200)
+        rows = con.execute("SELECT * FROM project_summary_history WHERE project_id=? AND revision>? ORDER BY revision LIMIT ?", (pid,after,limit)).fetchall()
+        return {"project_id": pid, "history": [dict(r) for r in rows],
+                "last_revision": rows[-1]["revision"] if rows else after}
     if operation == "board":
         include = flag(params, "include_dropped")
         tasks = con.execute("SELECT * FROM tasks WHERE project_id=? ORDER BY id", (pid,)).fetchall()

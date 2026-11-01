@@ -9,6 +9,7 @@ legacy %USERPROFILE%/.agent-harness/harness.db is used if it still exists)
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sqlite3
@@ -112,6 +113,32 @@ CREATE TABLE IF NOT EXISTS session_bindings (
     UNIQUE (provider, thread_id)
 );
 CREATE INDEX IF NOT EXISTS idx_bindings_project ON session_bindings(project_id, status);
+CREATE TABLE IF NOT EXISTS project_summary_versions (
+    project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS project_summary_history (
+    project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    previous_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT 'unknown',
+    source TEXT NOT NULL DEFAULT 'legacy',
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(project_id,revision)
+);
+INSERT OR IGNORE INTO project_summary_versions(project_id,revision) SELECT id,0 FROM projects;
+CREATE TRIGGER IF NOT EXISTS project_summary_insert AFTER INSERT ON projects BEGIN
+    INSERT INTO project_summary_versions(project_id,revision) VALUES (NEW.id,0);
+END;
+CREATE TRIGGER IF NOT EXISTS project_summary_update AFTER UPDATE OF summary ON projects
+WHEN OLD.summary IS NOT NEW.summary BEGIN
+    INSERT INTO project_summary_versions(project_id,revision) VALUES (NEW.id,1)
+    ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
+    INSERT INTO project_summary_history(project_id,revision,previous_summary,summary,created_at)
+    SELECT NEW.id,revision,OLD.summary,NEW.summary,strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    FROM project_summary_versions WHERE project_id=NEW.id;
+END;
 """
 
 
@@ -144,6 +171,29 @@ def get_project(con, slug: str) -> sqlite3.Row:
 
 def touch_project(con, project_id: int):
     con.execute("UPDATE projects SET updated_at=? WHERE id=?", (now(), project_id))
+
+
+def summary_snapshot(con, project_id: int):
+    """A revision changes only when summary content changes, including old writers."""
+    row = con.execute("SELECT p.id,p.slug,p.name,p.summary,v.revision FROM projects p JOIN project_summary_versions v ON v.project_id=p.id WHERE p.id=?", (project_id,)).fetchone()
+    if row is None:
+        raise ValueError("Project not found")
+    fingerprint = hashlib.sha256(json.dumps([row["id"],row["summary"]], ensure_ascii=False).encode("utf-8")).hexdigest()
+    return {"project_id": row["id"], "slug": row["slug"], "name": row["name"],
+            "summary": row["summary"], "revision": f"{row['revision']}:{fingerprint}"}
+
+
+def set_summary(con, project_id: int, body: str, actor: str, source: str):
+    """Caller holds a write transaction and commits the summary and its audit."""
+    if not isinstance(body, str) or len(body) > 100000 or "\x00" in body:
+        raise ValueError("Summary must be a string of at most 100000 characters without NUL")
+    previous = summary_snapshot(con, project_id)
+    if previous["summary"] == body:
+        return {**previous, "changed": False}
+    con.execute("UPDATE projects SET summary=?,updated_at=? WHERE id=?", (body,now(),project_id))
+    con.execute("UPDATE project_summary_history SET actor=?,source=?,created_at=? WHERE project_id=? AND revision=(SELECT revision FROM project_summary_versions WHERE project_id=?)",
+                (actor,source,now(),project_id,project_id))
+    return {**summary_snapshot(con, project_id), "changed": True}
 
 
 def post_task_event(con, project_id: int, author: str, body: str):
@@ -287,13 +337,19 @@ def cmd_log(a):
 
 
 def cmd_summary(a):
-    con = connect()
-    p = get_project(con, a.project)
     text = a.text if a.text != "-" else sys.stdin.read().strip()
-    con.execute("UPDATE projects SET summary=?, updated_at=? WHERE id=?",
-                (text, now(), p["id"]))
-    con.commit()
-    print(f"summary updated for '{a.project}'")
+    con = connect()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        p = get_project(con, a.project)
+        set_summary(con, p["id"], text, a.author or "unknown", "cli")
+        con.commit()
+        print(f"summary updated for '{a.project}'")
+    except ValueError as exc:
+        con.rollback()
+        sys.exit(f"error: {exc}")
+    finally:
+        con.close()
 
 
 def cmd_workdir(a):
@@ -684,6 +740,7 @@ def main(argv=None):
     p = sub.add_parser("summary", help="set the living layman's-terms project summary")
     p.add_argument("project")
     p.add_argument("text", help="summary text, or '-' to read stdin")
+    p.add_argument("--as", dest="author", default="", help="agent identity for the summary audit (old calls without it record unknown)")
     p.set_defaults(fn=cmd_summary)
 
     p = sub.add_parser("rename", help="change a project's display name while preserving its identifier")
