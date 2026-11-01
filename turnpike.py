@@ -305,6 +305,47 @@ def cmd_workdir(a):
     print(f"workdir for '{a.project}' -> {a.path}")
 
 
+def cmd_rename(a):
+    name = a.name.strip()
+    if not name:
+        sys.exit("error: project name must not be blank")
+    con = connect()
+    p = get_project(con, a.project)
+    con.execute("UPDATE projects SET name=?, updated_at=? WHERE id=?",
+                (name, now(), p["id"]))
+    con.execute("INSERT INTO messages (project_id, author, kind, body, created_at) VALUES (?,?,?,?,?)",
+                (p["id"], a.author, "note", f"Renamed project from {p['name']} to {name}. Project identifier remains {p['slug']}.", now()))
+    con.commit()
+    print(f"'{a.project}' renamed to '{name}'")
+
+
+def cmd_task_prune(a):
+    try:
+        cutoff = datetime.fromisoformat(a.before.replace("Z", "+00:00"))
+        if cutoff.utcoffset() is None:
+            raise ValueError("timezone required")
+        cutoff = cutoff.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        sys.exit("error: --before requires an ISO timestamp with a timezone")
+    con = connect()
+    con.execute("BEGIN IMMEDIATE")
+    rows = con.execute("SELECT * FROM tasks WHERE status != 'dropped' AND updated_at < ? ORDER BY id",
+                       (cutoff,)).fetchall()
+    if not a.dry_run:
+        for task in rows:
+            con.execute("UPDATE tasks SET status='dropped', updated_at=? WHERE id=?", (now(), task["id"]))
+            apply_task_status(con, task["id"], "dropped")
+            post_task_event(con, task["project_id"], a.author,
+                            f"Evicted task #{task['id']} from the board under the age policy: {task['status']} -> dropped; last updated {task['updated_at']}, before {cutoff}. History retained.")
+        for project_id in {t["project_id"] for t in rows}:
+            touch_project(con, project_id)
+        con.commit()
+    else:
+        con.rollback()
+    print(json.dumps({"before": cutoff, "dry_run": a.dry_run, "count": len(rows),
+                      "tasks": [dict(t) for t in rows]}, indent=2))
+
+
 def cmd_project_status(a):
     con = connect()
     p = get_project(con, a.project)
@@ -625,6 +666,18 @@ def main(argv=None):
     p.add_argument("project")
     p.add_argument("text", help="summary text, or '-' to read stdin")
     p.set_defaults(fn=cmd_summary)
+
+    p = sub.add_parser("rename", help="change a project's display name while preserving its identifier")
+    p.add_argument("project")
+    p.add_argument("name")
+    author_arg(p)
+    p.set_defaults(fn=cmd_rename)
+
+    p = sub.add_parser("task-prune", help="evict board cards last updated before a cutoff, retaining history")
+    p.add_argument("--before", required=True, help="exclusive ISO timestamp cutoff with timezone")
+    p.add_argument("--dry-run", action="store_true")
+    author_arg(p)
+    p.set_defaults(fn=cmd_task_prune)
 
     p = sub.add_parser("status", help="set project status")
     p.add_argument("project")
