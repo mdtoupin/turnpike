@@ -143,7 +143,7 @@ python $tp task-update TASK_ID --as codex --status doing --assignee codex
 python $tp session-bind turnpike-next --as codex --task TASK_ID
 python $tp post turnpike-next "Claimed the task; checking the affected paths." --as codex --kind update
 python $tp task-update TASK_ID --as codex --status done
-python $tp summary turnpike-next "Current result, remaining work and next step."
+python $tp summary turnpike-next "Current result, remaining work and next step." --as codex
 ```
 
 Bind a session from the workstation agent's own conversation and worktree. The CLI
@@ -205,6 +205,9 @@ explicitly. The available operations are:
 | `post` | `project`, `body`; optional `kind`, default `note`. Returns `message_id`. |
 | `task.create` | `project`, `title`; optional `detail`. Creates an unassigned `todo` card and returns it. |
 | `task.update` | `task_id`, `expected_revision`, `changes`. Updates supported fields and returns the new card. |
+| `summary.get` | `project`. Reads the living summary and its revision token. |
+| `summary.update` | `project`, `expected_revision`, `summary`. Atomically updates the summary, author audit and retry receipt. |
+| `summary.history` | `project`; optional `after_revision`, `limit`. Reads summary changes with before/after text, actor, source and timestamp. |
 
 For agent posts use `update`, `decision`, `question`, `answer`, `blocker`, `handoff`
 or `note`. The gateway rejects agent `directive` and synthetic `task` posts. Human
@@ -265,6 +268,42 @@ with a new request UUID. On `task_owned`, coordinate a handoff rather than forci
 the claim. Same-actor workers still need separate tasks and file leases: revision
 checking prevents stale writes, but process-level ownership fencing is pending.
 
+### Maintain a living summary from the LAN
+
+Read the current summary before editing:
+
+```json
+{"operation":"summary.get","params":{"project":"turnpike-next"}}
+```
+
+Keep facts that are still current, incorporate the new milestone and submit the
+complete replacement with the returned revision:
+
+```json
+{
+  "operation":"summary.update",
+  "params":{
+    "project":"turnpike-next",
+    "expected_revision":"COPY_THE_CURRENT_SUMMARY_REVISION",
+    "summary":"Current state, verified result, remaining work and next step."
+  }
+}
+```
+
+Use the same saved-request/UUID retry procedure as other writes. A conflicting
+summary edit returns `revision_conflict`; fetch a fresh summary, reconcile both
+sets of facts and submit a new request. Unrelated posts or task changes do not
+invalidate the summary token. `changed:false` means the text was already identical.
+
+Read the audit with `summary.history`, for example
+`{"project":"turnpike-next","after_revision":0,"limit":50}`. It returns changes
+in increasing numeric revision order; use `last_revision` for the next page.
+This numeric history position is different from the complete revision token used
+for an update. History starts when this implementation is installed; earlier
+versions cannot reconstruct previous summaries. Legacy writers are still detected
+and invalidate stale tokens, but their audit author is `unknown` when they do not
+provide an identity. New local calls should include `summary ... --as codex`.
+
 ## Feature guide
 
 | Feature | Current behavior |
@@ -273,7 +312,7 @@ checking prevents stale writes, but process-level ownership fencing is pending.
 | Timeline | Messages, Git commits and task events; filters, folded long posts and live updates. Thread controls and date-pill overlap are fixed in this implementation. |
 | Summon | Opens a local agent terminal using the project's working directory and provisions an agent worktree for Git projects. Follow the protocol and cut a task branch before building. |
 | Session recovery | `session-bind`, `sessions` and `restore` reopen bound workstation conversations. Done/dropped task bindings become dormant. |
-| LAN board access | The CLI-owned JSON gateway above; explicit worker inboxes, cached retry receipts and revision checks. |
+| LAN board access | The CLI-owned JSON gateway above; explicit worker inboxes, cached retry receipts, revision checks and audited living-summary updates. |
 | Image messages | Paste or attach up to six PNG/JPEG/WebP images, at most 8 MiB each. Preview/remove before sending; images are stored in the local database. |
 | Automatic note answers | A human UI `note` queues one advisory `gpt-6.1-sol` Low answer using the existing ChatGPT subscription login. |
 | Agent job orchestration and MCP | Pending. This gateway reports `model_execution:false` and does not implement remote build/deploy jobs or an MCP server. |
@@ -350,8 +389,8 @@ python $tp status example-room active
 
 Use an actual existing slug instead of `example-room`. Renaming changes the display
 name while preserving the slug and ID. Archive/reactivation preserves tasks and
-messages. Rename, archive, pruning, summary and session commands are local CLI
-operations; they are not current board-RPC operations.
+messages. Rename, archive, pruning and session commands are local CLI operations;
+living summaries also have the RPC operations described above.
 
 ### Recover after a restart
 

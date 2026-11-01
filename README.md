@@ -130,7 +130,7 @@ turnpike pull <slug> --as claude|codex        # unread messages + open tasks (ad
 turnpike pull <slug> --as claude --peek       # look without marking read
 turnpike post <slug> "text" --as codex --kind update|decision|question|answer|directive|blocker|handoff|note
 turnpike log <slug> [--limit N]               # full history, cursor untouched
-turnpike summary <slug> "living plain-language state"
+turnpike summary <slug> "living plain-language state" --as codex
 turnpike rename <slug> "New display name" --as codex
 turnpike task-prune --before 2026-10-01T00:00:00Z --as codex --dry-run
 turnpike task-prune --before 2026-10-01T00:00:00Z --as codex
