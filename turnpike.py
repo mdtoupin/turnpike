@@ -355,6 +355,11 @@ def cmd_project_status(a):
     print(f"'{a.project}' -> {a.status}")
 
 
+def cmd_rpc(a):
+    from turnpike_rpc import serve
+    serve(a.author)
+
+
 def cmd_task_add(a):
     con = connect()
     p = get_project(con, a.project)
@@ -641,6 +646,10 @@ def main(argv=None):
     p = sub.add_parser("projects", help="list projects")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_projects)
+
+    p = sub.add_parser("rpc", help="serve versioned JSON board requests on stdin/stdout (suitable for SSH)")
+    p.add_argument("--as", dest="author", required=True, choices=("codex", "claude", "deepseek"))
+    p.set_defaults(fn=cmd_rpc)
 
     p = sub.add_parser("post", help="post a message to a project")
     p.add_argument("project")
